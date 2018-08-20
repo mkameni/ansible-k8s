@@ -1,0 +1,112 @@
+---
+# file: roles/k8s-common/tasks/main.yml
+
+- name: k8s | Edit hosts files
+  lineinfile: dest=/etc/hosts regexp=".*{{ item }}$" line="{{ hostvars[item].ansible_host }} {{ item }}" state=present
+  when: hostvars[item].ansible_host is defined
+  with_items: "{{ groups['all'] }}"
+  tags: hosts
+
+- name: k8s | Set hostname
+  hostname: name="{{ inventory_hostname }}"
+
+- name: k8s | Configure SELinux - Put SELinux in permissive mode, logging actions that would be blocked.
+  selinux: policy=targeted state=permissive
+  tags: selinux
+
+- name: k8s | Disable swap
+  command: swapoff -a
+  tags: swapoff
+
+- name: k8s | Disable swap comment line on /etc/fstab
+  command: sed -i '/ swap / s/^/#/' /etc/fstab
+  tags: fstab
+
+- name: k8s | Enable br_netfilter
+  modprobe: name=br_netfilter state=present
+  tags: br_netfiter
+
+- name: k8s | Enable bridge-nf-call-iptables
+  sysctl: name=net.bridge.bridge-nf-call-iptables value=1 sysctl_set=yes state=present reload=yes
+  tags: bridge-nf-call-iptables
+
+- name: k8s | Enable bridge-nf-call-ip6tables
+  sysctl: name=net.bridge.bridge-nf-call-ip6tables value=1 sysctl_set=yes state=present reload=yes
+  tags: bridge-nf-call-ip6tables
+
+- name: k8s | Enable ipvs modules
+  modprobe: name={{ item }} state=present
+  with_items:
+    - ip_vs
+    - ip_vs_rr
+    - ip_vs_wrr
+    - ip_vs_sh
+    - nf_conntrack_ipv4
+  tags: ipvs
+
+- name: k8s | Install docker pre-requis
+  yum: name={{ item }} state=present
+  with_items:
+    - yum-utils
+    - device-mapper-persistent-data
+    - lvm2
+  tags: docker_tools
+
+- name: k8s | Add docker repo
+  get_url: url=https://download.docker.com/linux/centos/docker-ce.repo dest=/etc/yum.repos.d/docker-ce.repo
+
+- name: k8s | remove old version of docker
+  yum: name={{ item }} state=absent
+  with_items:
+    - docker
+    - docker-client
+    - docker-client-latest
+    - docker-common
+    - docker-latest
+    - docker-latest-logrotate
+    - docker-logrotate
+    - docker-selinux
+    - docker-engine-selinux
+    - docker-engine
+
+- name: k8s | Install Docker 17.03
+  command: yum install --setopt=obsoletes=0 docker-ce-17.03.2.ce-1.el7.centos.x86_64 docker-ce-selinux-17.03.2.ce-1.el7.centos.noarch -y
+  tags: docker17.03
+
+- name: k8s | Enable docker
+  systemd: name=docker state=started enabled=yes  daemon_reload=yes
+  tags: enable_docker
+
+- name: k8s | Configure firewalld
+  systemd: name=firewalld state=stopped enabled=no
+  tags: firewalld
+
+- name: k8s | Load kubernetes repo file on the server
+  copy: src=./files/kubernetes.repo dest=/etc/yum.repos.d/kubernetes.repo force=yes
+  tags: kubernets_repo
+
+# - name: upgrade all packages
+#   yum: name="*" state=latest
+
+- name: k8s | Install kubernetes
+  yum: name={{ item }} state=present
+  with_items:
+    - kubelet
+    - kubeadm
+    - kubectl
+  register: install_kubernetes
+  tags: kubernetes
+
+- name: k8s | Enable kubernetes
+  systemd: name=kubelet state=started enabled=yes daemon_reload=yes
+  tags: enable_kubelet
+
+- name: Reboot immediately if there was a change.
+  shell: "sleep 5 && reboot"
+  async: 1
+  poll: 0
+  when: install_kubernetes is changed
+
+- name: Wait for the reboot to complete if there was a change.
+  wait_for_connection: connect_timeout=20 sleep=5 delay=5 timeout=300
+  when: install_kubernetes is changed

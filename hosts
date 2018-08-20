@@ -1,0 +1,5 @@
+[master]
+k8smaster.homelab.local ansible_host=10.30.0.10  ansible_user=root
+[workers]
+k8sworker01.homelab.local ansible_host=10.30.0.11  ansible_user=root
+k8sworker02.homelab.local ansible_host=10.30.0.12  ansible_user=root
